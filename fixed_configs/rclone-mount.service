@@ -1,0 +1,36 @@
+[Unit]
+Description=Rclone Mount Google Drive for Nextcloud
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=root
+Group=root
+ExecStartPre=/bin/mkdir -p /mnt/gdrive
+ExecStart=/usr/bin/rclone mount alldrive: /mnt/gdrive \
+    --config=/home/paperspace/nextcloud-server/rclone/rclone.conf \
+    --allow-other \
+    --allow-non-empty \
+    --dir-cache-time=1000h \
+    --vfs-cache-mode=full \
+    --vfs-cache-max-size=5G \
+    --vfs-cache-max-age=24h \
+    --vfs-read-chunk-size=32M \
+    --vfs-read-chunk-size-limit=2G \
+    --buffer-size=32M \
+    --umask=000 \
+    --uid=33 \
+    --gid=33 \
+    --poll-interval=15s \
+    --drive-chunk-size=32M \
+    --timeout=1h \
+    --log-level=INFO \
+    --log-file=/var/log/rclone-mount.log
+ExecStop=/bin/fusermount -u /mnt/gdrive
+Restart=always
+RestartSec=10
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

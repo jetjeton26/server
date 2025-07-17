@@ -1,0 +1,124 @@
+version: '3.8'
+
+networks:
+  nextcloud:
+    driver: bridge
+
+services:
+  db:
+    image: mysql:8.0.36-debian
+    container_name: ${COMPOSE_PROJECT_NAME}-db
+    restart: always
+    command: --default-authentication-plugin=mysql_native_password --innodb-buffer-pool-size=512M
+    networks:
+      - nextcloud
+    volumes:
+      - nextcloud_db:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  redis:
+    image: redis:alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-redis
+    restart: always
+    networks:
+      - nextcloud
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+
+  app:
+    image: nextcloud:apache
+    container_name: ${COMPOSE_PROJECT_NAME}-app
+    restart: always
+    ports:
+      - "8081:80"
+    networks:
+      - nextcloud
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # ✅ PERBAIKAN: Mount seluruh html tapi ekspos data ke GDrive
+      - nextcloud_html:/var/www/html
+      - /mnt/gdrive/data:/var/www/html/data
+      - /mnt/gdrive/config:/var/www/html/config
+    environment:
+      - MYSQL_HOST=db
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - REDIS_HOST=redis
+      - REDIS_HOST_PASSWORD=${REDIS_PASSWORD}
+      - NEXTCLOUD_TRUSTED_DOMAINS=${TRUSTED_DOMAINS}
+      - OVERWRITEPROTOCOL=https
+      - OVERWRITECLIURL=https://${DOMAIN}
+      - APACHE_DISABLE_REWRITE_IP=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/status.php"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  backup:
+    image: alpine:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-backup
+    restart: unless-stopped
+    networks:
+      - nextcloud
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_started
+    volumes:
+      - backup_data:/backup
+      - /mnt/gdrive/data:/data:ro
+      - ./rclone:/config:ro
+    environment:
+      - MYSQL_HOST=db
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+    command: >
+      sh -c 'apk add --no-cache mysql-client rclone tar gzip &&
+      while true; do
+        TIMESTAMP=$$(date +%Y%m%d_%H%M%S);
+        echo "[⏳] Starting backup at $$TIMESTAMP";
+        
+        # Database backup
+        mysqldump -h db -u ${MYSQL_USER} -p${MYSQL_PASSWORD} ${MYSQL_DATABASE} | gzip > /backup/db_$$TIMESTAMP.sql.gz;
+        
+        # Data backup (exclude cache directories)
+        tar --exclude="*/cache/*" --exclude="*/tmp/*" -czf /backup/data_$$TIMESTAMP.tar.gz -C /data .;
+        
+        # Config backup
+        if [ -f /config/rclone.conf ]; then
+          cp /config/rclone.conf /backup/rclone_$$TIMESTAMP.conf;
+        fi;
+        
+        # Cleanup old backups (keep 7 days)
+        find /backup -name "*.sql.gz" -mtime +7 -delete;
+        find /backup -name "*.tar.gz" -mtime +7 -delete;
+        find /backup -name "*.conf" -mtime +7 -delete;
+        
+        # Upload to Google Drive (if rclone configured)
+        if [ -f /config/rclone.conf ]; then
+          rclone copy /backup alldrive:/nextcloud-backup --config /config/rclone.conf --log-level INFO;
+        fi;
+        
+        echo "[✅] Backup completed at $$TIMESTAMP";
+        sleep 43200;  # 12 hours
+      done'
+
+volumes:
+  nextcloud_db:
+  nextcloud_html:
+  backup_data:
