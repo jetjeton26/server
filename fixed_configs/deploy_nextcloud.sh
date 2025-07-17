@@ -17,6 +17,12 @@ PROJECT_DIR="$HOME/nextcloud-server"
 RCLONE_CONFIG="$PROJECT_DIR/rclone/rclone.conf"
 MOUNT_DIR="/mnt/gdrive"
 
+# Auto-detect current directory if running from project folder
+if [[ "$(basename $PWD)" == "nextcloud-server" ]]; then
+    PROJECT_DIR="$PWD"
+    RCLONE_CONFIG="$PROJECT_DIR/rclone/rclone.conf"
+fi
+
 # ===== FUNGSI UTILITAS =====
 check_command() {
     if ! command -v "$1" &> /dev/null; then
